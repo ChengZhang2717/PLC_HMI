@@ -1,0 +1,23 @@
+# TIA Portal / WinCC 临时与备份文件
+*.bak
+*.tmp
+~$*
+*~
+Backup/
+Recovery/
+
+# TIA 项目工作目录（只提交 .zap 归档或源码导出，不提交整个工程目录）
+TIA_PROJECT/
+IM/
+
+# Windows 系统文件
+Thumbs.db
+Desktop.ini
+
+# Office 临时
+~$*.docx
+~$*.xlsx
+~$*.pptx
+
+# PDF 等大文件的临时锁
+.~lock.*

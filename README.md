@@ -9,6 +9,7 @@
 | `PLC_Sources/` | PLC 程序源码：SCL / LAD / FBD 导出文件，按项目或设备分文件夹 |
 | `HMI_Screens/` | HMI 画面、脚本与模板导出 |
 | `Libraries/` | 通用功能块（FB/FC）与可复用库 |
+| `Projects/` | 项目归档（.zap / .rar 整包，按项目命名） |
 | `Docs/` | 操作说明、图纸、技术文档（PDF 等） |
 
 ## 约定

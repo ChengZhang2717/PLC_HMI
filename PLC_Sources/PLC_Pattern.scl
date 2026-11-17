@@ -1,0 +1,158 @@
+// =====================================================================
+// 地抛机（三轴龙门砂轮修磨机）— 轨迹生成与参数校验
+// ---------------------------------------------------------------------
+// 目标平台：TIA Portal / S7-1200 (CPU 121xC) 或 S7-1500
+// 导入方式：项目树 → 外部源文件 → 添加现有源文件 → 选中本文件
+//           → 右键"从源生成块"→ 全部生成
+// 包含块  ：UDT_Pattern  工艺参数结构
+//           DB_Pattern    工艺参数实例（HMI 直接读写此块）
+//           FC_Pattern_Check   参数合理性校验（安全底座）
+//           FC_Pattern_Target  计算第 N 行的目标坐标
+// 坐标系约定：
+//   X = 左右（龙门横梁移动，砂轮所在方向）→ 加工宽度方向
+//   Y = 前后（滑台移动）→ 工件长度方向，单刀直线修磨沿 Y 走
+//   Z = 上下（砂轮升降）→ 向上为正
+//   Z 修磨位置 = Z_Work - Z_Depth + Z_Manual
+//   Z_Depth  正值 = 向下切入
+//   Z_Manual 正值 = 操作工经验修正，抬高一点（少切）；负值 = 多切一点
+// =====================================================================
+
+
+TYPE "UDT_Pattern"
+VERSION : 1.0
+   STRUCT
+      Y_Start       : LReal;   // 直线修磨起点 Y (mm)
+      Y_End         : LReal;   // 直线修磨终点 Y (mm)
+      Step_X        : LReal;   // X 向步距 (mm)，一般 = 砂轮有效宽度 - 重叠量
+      Line_Count    : Int;     // 行数（左右往复次数）
+      Z_Work        : LReal;   // Z 修磨基准高度 = 工件表面 (mm)
+      Z_Depth       : LReal;   // Z 切深 (mm)，正值向下
+      Z_Safe        : LReal;   // Z 安全抬刀高度 (mm)
+      Feed          : LReal;   // 修磨进给速度 (mm/min)
+      Spindle_Speed : Int;     // 主轴转速 (rpm)
+      Z_Manual      : LReal;   // 经验修正量 (mm)，无测量反馈时靠这个
+      Wheel_Width   : LReal;   // 砂轮有效宽度 (mm)
+      Work_Width    : LReal;   // 工件宽度方向尺寸 (mm)，X 方向
+   END_STRUCT;
+END_TYPE
+
+
+DATA_BLOCK "DB_Pattern"
+{ S7_Optimified_Access := 'TRUE' }
+VERSION : 1.0
+   "UDT_Pattern"
+BEGIN
+   Y_Start       := 0.0;      // 示例：沿 Y 走 500 mm
+   Y_End         := 500.0;
+   Step_X        := 120.0;    // 示例：砂轮有效宽 130，重叠 10
+   Line_Count    := 5;        // 示例：5 行 × 120 覆盖 610 mm
+   Z_Work        := 0.0;      // 以工件表面为 0
+   Z_Depth       := 0.03;     // 切深 0.03 mm
+   Z_Safe        := 5.0;      // 抬刀 5 mm
+   Feed          := 300.0;    // 进给 300 mm/min
+   Spindle_Speed := 1800;
+   Z_Manual      := 0.0;
+   Wheel_Width   := 130.0;
+   Work_Width    := 650.0;    // 610 < 650 才合法
+END_DATA_BLOCK
+
+
+FUNCTION "FC_Pattern_Check" : Void
+{ S7_Optimified_Access := 'TRUE' }
+VERSION : 1.0
+VAR_INPUT
+    P : "UDT_Pattern";    // 工艺参数
+END_VAR
+VAR_OUTPUT
+    Valid         : Bool;      // TRUE = 允许启动自动运行
+    Err_Code      : Int;       // 0=正常 1..6 见下
+    Err_Text      : String[80];
+    Covered_Width : LReal;     // 实际覆盖宽度 (mm)
+    Y_Length      : LReal;     // 单刀 Y 行程 (mm)
+END_VAR
+
+BEGIN
+    Valid         := FALSE;
+    Err_Code      := 0;
+    Err_Text      := '';
+    Covered_Width := 0.0;
+    Y_Length      := 0.0;
+
+    // 1) Y 行程方向
+    IF (P.Y_End <= P.Y_Start) THEN
+        Err_Code := 1;
+        Err_Text := 'Y 行程无效：Y 终点必须大于 Y 起点';
+        RETURN;
+    END_IF;
+    Y_Length := P.Y_End - P.Y_Start;
+
+    // 2) X 步距
+    IF (P.Step_X <= 0.0) THEN
+        Err_Code := 2;
+        Err_Text := 'X 步距必须大于 0';
+        RETURN;
+    END_IF;
+
+    // 3) 行数
+    IF (P.Line_Count < 1) THEN
+        Err_Code := 3;
+        Err_Text := '行数必须大于等于 1';
+        RETURN;
+    END_IF;
+
+    // 4) 覆盖宽度不得超过工件宽度
+    Covered_Width := LREAL#0 + INT_TO_LREAL(P.Line_Count - 1) * P.Step_X + P.Wheel_Width;
+    IF (Covered_Width > P.Work_Width) THEN
+        Err_Code := 4;
+        Err_Text := '覆盖宽度超出工件宽度，会修到工件外或撞夹具';
+        RETURN;
+    END_IF;
+
+    // 5) 抬刀高度必须高于修磨位置，否则 X 步进会拖伤工件
+    IF (P.Z_Safe <= (P.Z_Work - P.Z_Depth + P.Z_Manual)) THEN
+        Err_Code := 5;
+        Err_Text := 'Z 安全高度必须高于修磨位置（含经验修正）';
+        RETURN;
+    END_IF;
+
+    // 6) 切深符号
+    IF (P.Z_Depth < 0.0) THEN
+        Err_Code := 6;
+        Err_Text := '切深不能为负';
+        RETURN;
+    END_IF;
+
+    Valid := TRUE;
+END_FUNCTION
+
+
+FUNCTION "FC_Pattern_Target" : Void
+{ S7_Optimified_Access := 'TRUE' }
+VERSION : 1.0
+VAR_INPUT
+    P       : "UDT_Pattern";   // 工艺参数
+    Line_No : Int;             // 当前行号，1 .. Line_Count
+    Dir     : Int;             // +1 = 本行 Y 正向，-1 = 本行 Y 反向
+END_VAR
+VAR_OUTPUT
+    Target_X : LReal;   // 本行 X 目标 = (行号-1) * 步距
+    Start_Y  : LReal;   // 本行 Y 起点（= 上一刀终点，蛇形不需回起点）
+    Target_Y : LReal;   // 本行 Y 终点
+    Target_Z : LReal;   // 修磨时的 Z 目标（含经验修正）
+    Is_Last  : Bool;    // TRUE = 本行是最后一行
+END_VAR
+
+BEGIN
+    Target_X := LREAL#0 + INT_TO_LREAL(Line_No - 1) * P.Step_X;
+
+    IF (Dir >= 0) THEN
+        Start_Y  := P.Y_Start;
+        Target_Y := P.Y_End;
+    ELSE
+        Start_Y  := P.Y_End;
+        Target_Y := P.Y_Start;
+    END_IF;
+
+    Target_Z := P.Z_Work - P.Z_Depth + P.Z_Manual;
+    Is_Last  := (Line_No >= P.Line_Count);
+END_FUNCTION
